@@ -75,7 +75,7 @@ export default function LoginPage() {
 
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <Label className="text-sm text-muted-foreground">اسمك في المنافسة</Label>
+                <Label className="text-sm text-muted-foreground">اسمك</Label>
                 <Input
                   dir="rtl"
                   value={username}
