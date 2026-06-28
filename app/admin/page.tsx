@@ -21,6 +21,7 @@ type Match = {
   away_score: number | null
   status: string
   kickoff_time: string
+  penalties: boolean
 }
 
 type User = {
@@ -134,6 +135,7 @@ export default function AdminPage() {
       p_home_score: match.home_score ?? 0,
       p_away_score: match.away_score ?? 0,
       p_status: match.status,
+      p_penalties: match.penalties,
     })
     setSavingId(null)
     if (err) setError(err.message)
@@ -277,6 +279,12 @@ export default function AdminPage() {
 
   // ── Render: admin panel ────────────────────────────────────────────────────
 
+  const upcomingMatches = [...matches]
+    .filter(m => m.status === 'not_started')
+    .sort((a, b) => a.kickoff_time.localeCompare(b.kickoff_time))
+  const nextThreeIds = new Set(upcomingMatches.slice(0, 3).map(m => m.id))
+  const firstNextMatchId = upcomingMatches[0]?.id ?? null
+
   const TABS: { id: typeof tab; label: string }[] = [
     { id: 'matches', label: 'المباريات' },
     { id: 'users', label: 'المستخدمون' },
@@ -285,7 +293,7 @@ export default function AdminPage() {
   ]
 
   return (
-    <MobileShell showNav={false}>
+    <MobileShell showNav={false} maxWidthClass="max-w-full sm:max-w-[480px] md:max-w-4xl lg:max-w-6xl">
       {/* Header */}
       <header className="flex items-center justify-between mb-4">
         <h1 className="text-lg font-bold text-white">⚙️ المسؤول</h1>
@@ -378,8 +386,32 @@ export default function AdminPage() {
       {/* ── Tab: Matches ─────────────────────────────────────────────────── */}
       {tab === 'matches' && (
         <div className="space-y-3">
-          {matches.map(match => (
-            <div key={match.id} className="rounded-2xl border border-[#1f1f24] bg-[#111115] p-4">
+          {firstNextMatchId && (
+            <button
+              onClick={() => document.getElementById('next-match-anchor')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              className="w-full h-10 rounded-xl text-sm font-bold text-[#f59e0b] border border-[#f59e0b]/30 bg-[#f59e0b]/5 hover:bg-[#f59e0b]/10 transition-colors"
+            >
+              ⚡ انتقل للمباريات القادمة
+            </button>
+          )}
+          {matches.map(match => {
+            const isNext = nextThreeIds.has(match.id)
+            return (
+            <div
+              key={match.id}
+              id={match.id === firstNextMatchId ? 'next-match-anchor' : undefined}
+              className={cn(
+                'rounded-2xl border bg-[#111115] p-4',
+                isNext ? 'border-[#f59e0b]/50' : 'border-[#1f1f24]',
+              )}
+            >
+              {isNext && (
+                <div className="flex justify-start mb-2">
+                  <span className="text-[10px] font-bold text-[#f59e0b] bg-[#f59e0b]/10 border border-[#f59e0b]/30 px-2 py-0.5 rounded-full">
+                    ⚡ قادمة
+                  </span>
+                </div>
+              )}
               <p className="text-white font-bold text-base text-center mb-3">
                 {match.home_team} <span className="text-[#4b5563]">vs</span> {match.away_team}
               </p>
@@ -407,6 +439,19 @@ export default function AdminPage() {
                 <option value="live">مباشر</option>
                 <option value="finished">انتهت</option>
               </select>
+              {/* Penalties toggle — only relevant for knockout finished matches */}
+              <button
+                type="button"
+                onClick={() => setMatches(prev => prev.map(m => m.id === match.id ? { ...m, penalties: !m.penalties } : m))}
+                className={cn(
+                  'w-full h-10 rounded-xl text-sm font-bold mb-3 border transition-colors',
+                  match.penalties
+                    ? 'bg-[#fef3c7] text-[#92400e] border-[#f59e0b]'
+                    : 'bg-[#0a0a0a] text-[#4b5563] border-[#1f1f24] hover:text-white'
+                )}
+              >
+                {match.penalties ? '🟡 وصلت للبنلتيات' : 'لم تصل للبنلتيات'}
+              </button>
               <button
                 onClick={() => saveMatch(match)}
                 disabled={savingId === match.id}
@@ -415,7 +460,8 @@ export default function AdminPage() {
                 {savingId === match.id ? 'جاري الحفظ...' : 'حفظ'}
               </button>
             </div>
-          ))}
+            )
+          })}
           {matches.length === 0 && (
             <p className="text-[#4b5563] text-center py-10">لا توجد مباريات</p>
           )}

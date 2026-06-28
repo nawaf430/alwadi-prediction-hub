@@ -10,6 +10,13 @@ import {
 } from '@/lib/worldcup26-api'
 
 export const SCORES365_BASE = 'https://webws.365scores.com/web/games/allscores/'
+export const SCORES365_GAME_BASE = 'https://webws.365scores.com/web/game/'
+
+export type MatchGoalEvent = {
+  minute: string
+  player: string
+  side: 'home' | 'away'
+}
 
 export type Scores365Competitor = {
   name?: string
@@ -248,4 +255,109 @@ export function lookup365Match(
 ): NormalizedExternalMatch | undefined {
   return map.get(matchPairKey(homeTeam, awayTeam))
     ?? map.get(matchPairKey365(homeTeam, awayTeam))
+}
+
+type Scores365GameMember = {
+  id?: number
+  name?: string
+  shortName?: string
+}
+
+type Scores365GameEvent = {
+  competitorId?: number
+  playerId?: number
+  gameTimeDisplay?: string
+  gameTime?: number
+  eventType?: { id?: number; name?: string }
+}
+
+type Scores365GameDetail = {
+  id?: number
+  homeCompetitor?: { id?: number; name?: string }
+  awayCompetitor?: { id?: number; name?: string }
+  events?: Scores365GameEvent[]
+  members?: Scores365GameMember[]
+}
+
+/** eventType.id === 1 → goal (هدف) in observed 365scores responses */
+const GOAL_EVENT_TYPE_ID = 1
+
+export function normalize365GoalsFromGame(game: Scores365GameDetail): MatchGoalEvent[] {
+  const homeId = game.homeCompetitor?.id
+  const awayId = game.awayCompetitor?.id
+  if (homeId == null || awayId == null) return []
+
+  const nameByPlayerId = new Map<number, string>()
+  for (const m of game.members ?? []) {
+    if (m.id == null) continue
+    const name = (m.name ?? m.shortName ?? '').trim()
+    if (name) nameByPlayerId.set(m.id, name)
+  }
+
+  const goals: MatchGoalEvent[] = []
+  for (const ev of game.events ?? []) {
+    if (ev.eventType?.id !== GOAL_EVENT_TYPE_ID) continue
+    const minuteRaw = (ev.gameTimeDisplay ?? '').trim()
+    const minute = minuteRaw
+      ? (minuteRaw.includes("'") ? minuteRaw : `${minuteRaw}'`)
+      : ev.gameTime != null ? `${ev.gameTime}'` : ''
+    if (!minute) continue
+
+    const playerId = ev.playerId
+    const player = playerId != null ? (nameByPlayerId.get(playerId) ?? '') : ''
+    if (!player) continue
+
+    let side: 'home' | 'away' | null = null
+    if (ev.competitorId === homeId) side = 'home'
+    else if (ev.competitorId === awayId) side = 'away'
+    if (!side) continue
+
+    goals.push({ minute, player, side })
+  }
+
+  return goals.sort((a, b) => {
+    const na = parseInt(a.minute, 10)
+    const nb = parseInt(b.minute, 10)
+    if (!Number.isNaN(na) && !Number.isNaN(nb) && na !== nb) return na - nb
+    return a.minute.localeCompare(b.minute)
+  })
+}
+
+/** Fetch goal scorers for a single 365scores game (Arabic names via langId=27). */
+export async function fetch365GameGoals(
+  gameId: string | number,
+  timeoutMs = 15_000,
+): Promise<MatchGoalEvent[] | null> {
+  const params = new URLSearchParams({
+    appTypeId: '5',
+    langId: '27',
+    timezoneName: 'Asia/Riyadh',
+    userCountryId: '6',
+    gameId: String(gameId),
+  })
+
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    const res = await fetch(`${SCORES365_GAME_BASE}?${params.toString()}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: controller.signal,
+      next: { revalidate: 0 },
+    })
+    clearTimeout(timer)
+
+    if (!res.ok) {
+      console.warn('[365scores] game fetch failed:', res.status, gameId)
+      return null
+    }
+
+    const body = await res.json() as { game?: Scores365GameDetail }
+    const game = body.game
+    if (!game) return null
+    return normalize365GoalsFromGame(game)
+  } catch (err) {
+    console.warn('[365scores] game fetch error:', gameId, err instanceof Error ? err.message : err)
+    return null
+  }
 }

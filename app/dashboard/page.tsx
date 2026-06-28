@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
+import { flag } from '@/lib/flags'
 import { BottomNav } from '@/components/BottomNav'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -535,14 +536,20 @@ function MatchCard({
           )}
         </div>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-white font-bold text-sm flex-1 text-right truncate">{match.home_team}</span>
+          <div className="flex items-center gap-1.5 flex-1 justify-end min-w-0">
+            <span className="text-white font-bold text-sm truncate">{match.home_team}</span>
+            <span className="text-base shrink-0">{flag(match.home_team)}</span>
+          </div>
           <span className={cn(
             'font-bold text-base px-3 tabular-nums shrink-0',
             hasScore ? 'text-[#22c55e]' : 'text-[#374151]'
           )}>
             {hasScore ? `${match.home_score} - ${match.away_score}` : 'VS'}
           </span>
-          <span className="text-white font-bold text-sm flex-1 text-left truncate">{match.away_team}</span>
+          <div className="flex items-center gap-1.5 flex-1 justify-start min-w-0">
+            <span className="text-base shrink-0">{flag(match.away_team)}</span>
+            <span className="text-white font-bold text-sm truncate">{match.away_team}</span>
+          </div>
         </div>
       </div>
 

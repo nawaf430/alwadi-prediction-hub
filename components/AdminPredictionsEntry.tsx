@@ -68,25 +68,40 @@ export function AdminPredictionsEntry({
   participantsRef.current = participants
   const loadedMatchIdsRef = useRef(loadedMatchIds)
   loadedMatchIdsRef.current = loadedMatchIds
+  const matchesRef = useRef(matches)
+  matchesRef.current = matches
 
   const visibleMatches = useMemo(() => filterTodayTomorrowMatches(matches), [matches])
+  const visibleMatchIds = useMemo(
+    () => new Set(visibleMatches.map(m => m.id)),
+    [visibleMatches],
+  )
   const selectedMatches = useMemo(
     () => selectedMatchIds
+      .filter(id => visibleMatchIds.has(id))
       .map(id => matches.find(m => m.id === id))
       .filter((m): m is MatchForGrid => !!m),
-    [selectedMatchIds, matches],
+    [selectedMatchIds, matches, visibleMatchIds],
+  )
+  const activeSelectedMatchIds = useMemo(
+    () => selectedMatchIds.filter(id => visibleMatchIds.has(id)),
+    [selectedMatchIds, visibleMatchIds],
   )
 
   const participantIds = useMemo(() => participants.map(p => p.id), [participants])
 
   const persistDraftNow = useCallback(() => {
+    const visibleIds = new Set(
+      filterTodayTomorrowMatches(matchesRef.current).map(m => m.id),
+    )
+    const selected = selectedMatchIdsRef.current.filter(id => visibleIds.has(id))
     const grid = predGridRef.current
-    if (!hasDraftGridContent(grid) && selectedMatchIdsRef.current.length === 0) {
+    if (!hasDraftGridContent(grid) && selected.length === 0) {
       clearUnifiedDraft()
       return
     }
     const draft: UnifiedPredDraft = {
-      selectedMatchIds: selectedMatchIdsRef.current,
+      selectedMatchIds: selected,
       predGrid: grid,
       savedSnapshot: savedSnapshotRef.current,
       updatedAt: new Date().toISOString(),
@@ -133,31 +148,66 @@ export function AdminPredictionsEntry({
   useEffect(() => {
     if (draftInitialized || participants.length === 0) return
 
+    const empty = ensureParticipantKeys({}, {}, participants.map(p => p.id))
     const draft = loadDraftWithMigration()
     if (draft) {
+      const visibleIds = new Set(filterTodayTomorrowMatches(matches).map(m => m.id))
+      const restoredSelected = draft.selectedMatchIds.filter(id => visibleIds.has(id))
       const ensured = ensureParticipantKeys(
         draft.predGrid,
         draft.savedSnapshot,
         participants.map(p => p.id),
       )
-      setPredGrid(ensured.predGrid)
-      setSavedSnapshot(ensured.savedSnapshot)
-      setSelectedMatchIds(draft.selectedMatchIds.filter(id =>
-        matches.some(m => m.id === id),
-      ))
-      setDraftRestoredBanner(true)
-      for (const matchId of draft.selectedMatchIds) {
-        loadedMatchIdsRef.current.add(matchId)
-        setLoadedMatchIds(prev => new Set(prev).add(matchId))
+      const unsaved = restoredSelected.length > 0 && hasUnsavedChanges(
+        ensured.predGrid,
+        ensured.savedSnapshot,
+        restoredSelected,
+      )
+
+      if (unsaved) {
+        setPredGrid(ensured.predGrid)
+        setSavedSnapshot(ensured.savedSnapshot)
+        setSelectedMatchIds(restoredSelected)
+        setDraftRestoredBanner(true)
+        for (const matchId of restoredSelected) {
+          loadedMatchIdsRef.current.add(matchId)
+          setLoadedMatchIds(prev => new Set(prev).add(matchId))
+        }
+      } else {
+        clearUnifiedDraft()
+        setPredGrid(empty.predGrid)
+        setSavedSnapshot(empty.savedSnapshot)
+        setSelectedMatchIds([])
       }
     } else {
-      const ensured = ensureParticipantKeys({}, {}, participants.map(p => p.id))
-      setPredGrid(ensured.predGrid)
-      setSavedSnapshot(ensured.savedSnapshot)
+      setPredGrid(empty.predGrid)
+      setSavedSnapshot(empty.savedSnapshot)
     }
 
     setDraftInitialized(true)
   }, [draftInitialized, participants, matches])
+
+  // Drop matches that left today/tomorrow toggles (e.g. old localStorage draft)
+  useEffect(() => {
+    if (!draftInitialized) return
+    const prev = selectedMatchIdsRef.current
+    const next = prev.filter(id => visibleMatchIds.has(id))
+    if (next.length === prev.length) return
+
+    selectedMatchIdsRef.current = next
+    setSelectedMatchIds(next)
+    setDraftRestoredBanner(false)
+    if (next.length === 0) {
+      clearUnifiedDraft()
+    } else {
+      saveUnifiedDraft({
+        selectedMatchIds: next,
+        predGrid: predGridRef.current,
+        savedSnapshot: savedSnapshotRef.current,
+        updatedAt: new Date().toISOString(),
+      })
+    }
+  }, [draftInitialized, visibleMatchIds])
 
   // Fetch DB preds for newly selected matches
   useEffect(() => {
@@ -238,9 +288,36 @@ export function AdminPredictionsEntry({
     setSavedPreds(false)
   }
 
+  async function deleteCell(participantId: string, matchId: string) {
+    const res = await fetch('/api/admin/delete-prediction', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_pin: ADMIN_PIN, participant_id: participantId, match_id: matchId }),
+    })
+    if (!res.ok) { onError('فشل الحذف'); return }
+
+    setPredGrid(prev => {
+      const next = { ...prev }
+      if (next[participantId]) {
+        next[participantId] = { ...next[participantId] }
+        delete next[participantId][matchId]
+      }
+      return next
+    })
+    setSavedSnapshot(prev => {
+      const next = { ...prev }
+      if (next[participantId]) {
+        next[participantId] = { ...next[participantId] }
+        delete next[participantId][matchId]
+      }
+      return next
+    })
+  }
+
   async function saveAllPredictions() {
-    if (selectedMatchIds.length === 0) return
-    const rows = collectSaveRows(predGridRef.current, selectedMatchIdsRef.current)
+    const matchIds = selectedMatchIdsRef.current.filter(id => visibleMatchIds.has(id))
+    if (matchIds.length === 0) return
+    const rows = collectSaveRows(predGridRef.current, matchIds)
     if (rows.length === 0) {
       onError('لا توجد توقعات كاملة للحفظ')
       return
@@ -290,13 +367,40 @@ export function AdminPredictionsEntry({
   const hasFinishedSelected = selectedMatches.some(m => m.status === 'finished')
   const atSelectionCap = selectedMatchIds.length >= MAX_SELECTED_MATCHES
 
+  const upcomingSorted = useMemo(() =>
+    [...matches]
+      .filter(m => m.status === 'not_started')
+      .sort((a, b) => a.kickoff_time.localeCompare(b.kickoff_time)),
+  [matches])
+  const nextThreeIds = useMemo(() => new Set(upcomingSorted.slice(0, 3).map(m => m.id)), [upcomingSorted])
+  const firstNextMatchId = upcomingSorted[0]?.id ?? null
+
+  const toggleScrollRef = useRef<HTMLDivElement>(null)
+
+  function scrollToNextMatchBtn() {
+    const container = toggleScrollRef.current
+    if (!container) return
+    const btn = container.querySelector<HTMLElement>('[data-next-match="true"]')
+    if (btn) container.scrollLeft = btn.offsetLeft - 8
+  }
+
   return (
     <div>
       {/* Match toggles */}
       {visibleMatches.length === 0 ? (
         <p className="text-[#4b5563] text-center py-6 text-sm">لا توجد مباريات اليوم أو غداً</p>
       ) : (
-        <div className="flex gap-2 overflow-x-auto pb-2 mb-3 [&::-webkit-scrollbar]:hidden">
+        <>
+          {firstNextMatchId && (
+            <button
+              type="button"
+              onClick={scrollToNextMatchBtn}
+              className="w-full h-9 rounded-xl text-xs font-bold text-[#f59e0b] border border-[#f59e0b]/30 bg-[#f59e0b]/5 hover:bg-[#f59e0b]/10 transition-colors mb-2"
+            >
+              ⚡ انتقل للمباريات القادمة
+            </button>
+          )}
+          <div ref={toggleScrollRef} className="flex gap-2 overflow-x-auto pb-2 mb-3 [&::-webkit-scrollbar]:hidden">
           {visibleMatches.map(m => {
             const selected = selectedMatchIds.includes(m.id)
             const disabled = !selected && atSelectionCap
@@ -304,21 +408,25 @@ export function AdminPredictionsEntry({
               <button
                 key={m.id}
                 type="button"
+                data-next-match={m.id === firstNextMatchId ? 'true' : undefined}
                 onClick={() => !disabled && toggleMatch(m.id)}
                 disabled={disabled}
                 className={cn(
                   'shrink-0 rounded-xl px-3 py-2 text-xs font-bold whitespace-nowrap transition-colors border',
                   selected
                     ? 'bg-[#22c55e] text-black border-[#22c55e]'
-                    : 'bg-[#1f1f24] text-[#6b7280] border-[#1f1f24] hover:text-white',
+                    : nextThreeIds.has(m.id)
+                      ? 'bg-[#1c1400] text-[#f59e0b] border-[#f59e0b]/40 hover:border-[#f59e0b]/70'
+                      : 'bg-[#1f1f24] text-[#6b7280] border-[#1f1f24] hover:text-white',
                   disabled && 'opacity-40 cursor-not-allowed',
                 )}
               >
-                {matchToggleLabel(m)}
+                {nextThreeIds.has(m.id) && !selected ? '⚡ ' : ''}{matchToggleLabel(m)}
               </button>
             )
           })}
         </div>
+        </>
       )}
 
       {atSelectionCap && (
@@ -351,11 +459,11 @@ export function AdminPredictionsEntry({
         </div>
       )}
 
-      {selectedMatchIds.length === 0 && (
+      {activeSelectedMatchIds.length === 0 && (
         <p className="text-[#4b5563] text-center py-10 text-sm">اختر مباراة واحدة أو أكثر لإدخال التوقعات</p>
       )}
 
-      {loadingMatchId && selectedMatchIds.includes(loadingMatchId) && (
+      {loadingMatchId && activeSelectedMatchIds.includes(loadingMatchId) && (
         <div className="space-y-2 mb-3">
           {[...Array(3)].map((_, i) => (
             <div key={i} className="h-12 rounded-xl bg-[#111115] animate-pulse" />
@@ -363,32 +471,27 @@ export function AdminPredictionsEntry({
         </div>
       )}
 
-      {selectedMatchIds.length > 0 && participants.length === 0 && (
+      {activeSelectedMatchIds.length > 0 && participants.length === 0 && (
         <p className="text-[#4b5563] text-center py-10 text-sm">أضف مشاركين أولاً من تبويب &quot;المشاركون&quot;</p>
       )}
 
-      {selectedMatchIds.length > 0 && participants.length > 0 && (
+      {activeSelectedMatchIds.length > 0 && participants.length > 0 && (
         <>
           <div className="rounded-xl border border-[#1f1f24] bg-[#0a0a0a] overflow-hidden mb-4">
-            <div className="overflow-x-auto overscroll-contain max-h-[min(65vh,560px)] overflow-y-auto">
+            <div className="overflow-x-auto overscroll-contain max-h-[min(60vh,520px)] sm:max-h-[min(65vh,560px)] md:max-h-[min(72vh,680px)] lg:max-h-[min(75vh,780px)] overflow-y-auto">
               <table className="w-full min-w-max border-collapse" dir="rtl">
                 <thead>
                   <tr className="border-b border-[#1f1f24] bg-[#0a0a0a]/95">
-                    <th className="sticky right-0 z-20 bg-[#0a0a0a] px-3 py-2 text-right text-[10px] text-[#64748b] font-semibold min-w-[88px]">
+                    <th className="sticky right-0 z-20 bg-[#0a0a0a] px-3 py-2 md:px-4 md:py-2.5 text-right text-[10px] md:text-xs text-[#64748b] font-semibold min-w-[88px] md:min-w-[104px] lg:min-w-[120px]">
                       الاسم
                     </th>
                     {selectedMatches.map(m => (
                       <th
                         key={m.id}
-                        className="px-2 py-2 text-center min-w-[96px] border-r border-[#1f1f24]/60"
+                        className="px-2 py-2 md:px-3 md:py-2.5 text-center min-w-[104px] sm:min-w-[112px] md:min-w-[136px] lg:min-w-[160px] border-r border-[#1f1f24]/60"
                       >
-                        <div className="text-[10px] text-[#94a3b8] font-bold leading-tight truncate max-w-[92px] mx-auto">
+                        <div className="text-[10px] md:text-xs lg:text-sm text-[#94a3b8] font-bold leading-tight truncate max-w-[100px] sm:max-w-[120px] md:max-w-[140px] lg:max-w-[160px] mx-auto">
                           {m.home_team} vs {m.away_team}
-                        </div>
-                        <div className="flex items-center justify-center gap-1 mt-1">
-                          <span className="w-10 text-[9px] text-[#64748b] truncate">{m.home_team}</span>
-                          <span className="text-[9px] text-transparent">-</span>
-                          <span className="w-10 text-[9px] text-[#64748b] truncate">{m.away_team}</span>
                         </div>
                       </th>
                     ))}
@@ -397,7 +500,7 @@ export function AdminPredictionsEntry({
                 <tbody>
                   {participants.map(p => (
                     <tr key={p.id} className="border-b border-[#1f1f24]/50 last:border-0">
-                      <td className="sticky right-0 z-10 bg-[#0a0a0a] px-3 py-2 text-white text-sm font-medium truncate max-w-[100px]">
+                      <td className="sticky right-0 z-10 bg-[#0a0a0a] px-3 py-2 md:px-4 md:py-2.5 text-white text-sm md:text-base font-medium truncate max-w-[100px] md:max-w-[120px] lg:max-w-[140px]">
                         {p.name}
                       </td>
                       {selectedMatches.map(m => {
@@ -407,37 +510,61 @@ export function AdminPredictionsEntry({
                           <td
                             key={m.id}
                             className={cn(
-                              'px-2 py-2 border-r border-[#1f1f24]/40',
+                              'px-2 py-2 md:px-3 md:py-2.5 border-r border-[#1f1f24]/40',
                               saved ? 'bg-[#0b1a10]' : 'bg-transparent',
                             )}
                           >
                             <div
                               className={cn(
-                                'flex items-center justify-center gap-1 rounded-lg px-1 py-1',
+                                'relative flex items-end justify-center gap-1.5 md:gap-2 rounded-lg px-1 py-1 md:px-1.5 md:py-1.5',
                                 saved && 'border border-[#166534]/60',
                               )}
                             >
-                              <input
-                                type="number"
-                                inputMode="numeric"
-                                min={0}
-                                max={20}
-                                value={cell.home}
-                                onChange={e => updateCell(p.id, m.id, 'home', e.target.value)}
-                                placeholder="-"
-                                className="w-10 h-9 bg-[#111115] border border-[#1f1f24] text-white text-center text-sm font-bold rounded-md outline-none focus:border-[#22c55e]"
-                              />
-                              <span className="text-[#374151] font-bold text-xs">-</span>
-                              <input
-                                type="number"
-                                inputMode="numeric"
-                                min={0}
-                                max={20}
-                                value={cell.away}
-                                onChange={e => updateCell(p.id, m.id, 'away', e.target.value)}
-                                placeholder="-"
-                                className="w-10 h-9 bg-[#111115] border border-[#1f1f24] text-white text-center text-sm font-bold rounded-md outline-none focus:border-[#22c55e]"
-                              />
+                              {saved && (
+                                <button
+                                  type="button"
+                                  onClick={() => deleteCell(p.id, m.id)}
+                                  className="absolute top-0 left-0 w-5 h-5 flex items-center justify-center rounded-full bg-[#7f1d1d] text-[#fca5a5] text-xs hover:bg-[#991b1b] transition-colors"
+                                  title="حذف التوقع"
+                                >×</button>
+                              )}
+                              <div className="flex flex-col items-center gap-0.5 md:gap-1">
+                                <span
+                                  className="text-[9px] md:text-[10px] lg:text-xs text-[#64748b] font-semibold truncate max-w-[44px] sm:max-w-[52px] md:max-w-[64px] lg:max-w-[80px]"
+                                  title={m.home_team}
+                                >
+                                  {m.home_team}
+                                </span>
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={0}
+                                  max={20}
+                                  value={cell.home}
+                                  onChange={e => updateCell(p.id, m.id, 'home', e.target.value)}
+                                  placeholder="-"
+                                  className="w-10 h-9 sm:w-11 sm:h-10 md:w-12 md:h-11 lg:w-14 lg:h-12 bg-[#111115] border border-[#1f1f24] text-white text-center text-sm md:text-base lg:text-lg font-bold rounded-md md:rounded-lg outline-none focus:border-[#22c55e]"
+                                />
+                              </div>
+                              <span className="text-[#374151] font-bold text-xs md:text-sm pb-2 md:pb-2.5">-</span>
+                              <div className="flex flex-col items-center gap-0.5 md:gap-1">
+                                <span
+                                  className="text-[9px] md:text-[10px] lg:text-xs text-[#64748b] font-semibold truncate max-w-[44px] sm:max-w-[52px] md:max-w-[64px] lg:max-w-[80px]"
+                                  title={m.away_team}
+                                >
+                                  {m.away_team}
+                                </span>
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={0}
+                                  max={20}
+                                  value={cell.away}
+                                  onChange={e => updateCell(p.id, m.id, 'away', e.target.value)}
+                                  placeholder="-"
+                                  className="w-10 h-9 sm:w-11 sm:h-10 md:w-12 md:h-11 lg:w-14 lg:h-12 bg-[#111115] border border-[#1f1f24] text-white text-center text-sm md:text-base lg:text-lg font-bold rounded-md md:rounded-lg outline-none focus:border-[#22c55e]"
+                                />
+                              </div>
                             </div>
                           </td>
                         )
@@ -457,7 +584,7 @@ export function AdminPredictionsEntry({
             <button
               type="button"
               onClick={saveAllPredictions}
-              disabled={savingPreds || selectedMatchIds.length === 0}
+              disabled={savingPreds || activeSelectedMatchIds.length === 0}
               className="w-full h-12 rounded-xl bg-[#14532d] text-[#86efac] font-bold text-sm disabled:opacity-50"
             >
               {savingPreds ? 'جاري الحفظ...' : 'حفظ الكل'}

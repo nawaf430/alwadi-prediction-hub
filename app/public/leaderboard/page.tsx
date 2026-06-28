@@ -225,10 +225,10 @@ export default function PublicLeaderboard() {
           <div className="space-y-1.5 mb-6">
             {/* Header */}
             <div className="grid grid-cols-[2rem_1fr_4rem_2.5rem] gap-2 px-3 pb-1">
-              <span className="text-[10px] text-[#2a3a55] text-center">#</span>
-              <span className="text-[10px] text-[#2a3a55]">الاسم</span>
-              <span className="text-[10px] text-[#60a5fa] text-center">توقع صحيح</span>
-              <span className="text-[10px] text-[#2a3a55] text-left">نقاط</span>
+              <span className="text-xs text-[#4b5563] text-center font-medium">#</span>
+              <span className="text-xs text-[#6b7280] font-medium">الاسم</span>
+              <span className="text-xs text-[#60a5fa] text-center font-semibold">توقع صحيح</span>
+              <span className="text-xs text-[#6b7280] text-left font-medium">نقاط</span>
             </div>
 
             {rest.map((entry, i) => {

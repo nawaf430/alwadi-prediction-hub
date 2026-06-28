@@ -17,14 +17,14 @@ export async function GET() {
   const [windowStart, windowEnd] = next12hRange()
 
   let selectCols =
-    'id, home_team, away_team, kickoff_time, home_score, away_score, status, match_minute'
+    'id, home_team, away_team, kickoff_time, home_score, away_score, status, match_minute, match_events'
   let liveRes = await supabase
     .from('matches')
     .select(selectCols)
     .eq('status', 'live')
     .order('kickoff_time', { ascending: true })
 
-  if (liveRes.error?.message?.includes('match_minute')) {
+  if (liveRes.error?.message?.includes('match_minute') || liveRes.error?.message?.includes('match_events')) {
     selectCols = 'id, home_team, away_team, kickoff_time, home_score, away_score, status'
     liveRes = await supabase
       .from('matches')
@@ -50,11 +50,13 @@ export async function GET() {
     away_score: number | null
     status: string
     match_minute?: string | null
+    match_events?: Array<{ minute: string; player: string; side: 'home' | 'away' }> | null
   }
 
   const normalize = (m: MatchRow) => ({
     ...m,
     match_minute: m.match_minute ?? null,
+    match_events: Array.isArray(m.match_events) ? m.match_events : null,
   })
 
   const matches = [

@@ -38,15 +38,9 @@ export function addDays(dateStr: string, n: number): string {
   return d.toISOString().slice(0, 10)
 }
 
-/** Matches whose KSA kickoff date is today or tomorrow */
+/** All matches sorted by kickoff time (admin needs access to past matches too) */
 export function filterTodayTomorrowMatches(matches: MatchForGrid[]): MatchForGrid[] {
-  const today = todayKSA()
-  const tomorrow = addDays(today, 1)
-  const allowed = new Set([today, tomorrow])
-
-  return matches
-    .filter(m => allowed.has(toKSADateStr(m.kickoff_time)))
-    .sort((a, b) => a.kickoff_time.localeCompare(b.kickoff_time))
+  return [...matches].sort((a, b) => a.kickoff_time.localeCompare(b.kickoff_time))
 }
 
 export function formatKickoffShort(utcIso: string): string {

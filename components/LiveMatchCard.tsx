@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
+import { flag } from '@/lib/flags'
+import type { MatchGoalEvent } from '@/lib/365scores-api'
 
 type MatchCard = {
   id: string
@@ -13,6 +15,7 @@ type MatchCard = {
   away_score: number | null
   status: string
   match_minute: string | null
+  match_events: MatchGoalEvent[] | null
 }
 
 type LivePred = {
@@ -66,12 +69,13 @@ function next12hRange(): [string, string] {
 }
 
 const MATCH_SELECT_WITH_MINUTE =
-  'id, home_team, away_team, kickoff_time, home_score, away_score, status, match_minute'
+  'id, home_team, away_team, kickoff_time, home_score, away_score, status, match_minute, match_events'
 const MATCH_SELECT_BASE =
   'id, home_team, away_team, kickoff_time, home_score, away_score, status'
 
 function normalizeMatchRow(m: unknown): MatchCard {
-  const row = m as MatchCard & { match_minute?: string | null }
+  const row = m as MatchCard & { match_minute?: string | null; match_events?: MatchGoalEvent[] | null }
+  const events = row.match_events
   return {
     id: row.id,
     home_team: row.home_team,
@@ -81,8 +85,11 @@ function normalizeMatchRow(m: unknown): MatchCard {
     away_score: row.away_score,
     status: row.status,
     match_minute: row.match_minute ?? null,
+    match_events: Array.isArray(events) ? events : null,
   }
 }
+
+const MAX_GOALS_DISPLAY = 6
 
 // ── Single card (pure render) ────────────────────────────────────────────────
 
@@ -100,6 +107,9 @@ function MatchCardUI({ match, preds }: { match: MatchCard; preds: LivePred[] }) 
     isLive && match.home_score !== null && match.away_score !== null
       ? outcome(match.home_score, match.away_score)
       : null
+  const goals = match.match_events ?? []
+  const visibleGoals = goals.slice(0, MAX_GOALS_DISPLAY)
+  const hiddenGoals = goals.length - visibleGoals.length
 
   return (
     <div
@@ -139,25 +149,56 @@ function MatchCardUI({ match, preds }: { match: MatchCard; preds: LivePred[] }) 
 
         {isLive ? (
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[#e2e8f0] font-bold text-sm flex-1 text-right truncate">
-              {match.home_team}
-            </span>
+            <div className="flex items-center gap-1.5 flex-1 justify-end min-w-0">
+              <span className="text-[#e2e8f0] font-bold text-sm truncate">{match.home_team}</span>
+              <span className="text-base shrink-0">{flag(match.home_team)}</span>
+            </div>
             <span className="text-[#60a5fa] font-black text-2xl tabular-nums px-3 shrink-0 tracking-tight">
               {match.home_score ?? 0} - {match.away_score ?? 0}
             </span>
-            <span className="text-[#e2e8f0] font-bold text-sm flex-1 text-left truncate">
-              {match.away_team}
-            </span>
+            <div className="flex items-center gap-1.5 flex-1 justify-start min-w-0">
+              <span className="text-base shrink-0">{flag(match.away_team)}</span>
+              <span className="text-[#e2e8f0] font-bold text-sm truncate">{match.away_team}</span>
+            </div>
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[#e2e8f0] font-bold text-sm flex-1 text-right truncate">
-              {match.home_team}
-            </span>
+            <div className="flex items-center gap-1.5 flex-1 justify-end min-w-0">
+              <span className="text-[#e2e8f0] font-bold text-sm truncate">{match.home_team}</span>
+              <span className="text-base shrink-0">{flag(match.home_team)}</span>
+            </div>
             <span className="text-[#2a3a55] font-bold text-sm px-3 shrink-0">vs</span>
-            <span className="text-[#e2e8f0] font-bold text-sm flex-1 text-left truncate">
-              {match.away_team}
-            </span>
+            <div className="flex items-center gap-1.5 flex-1 justify-start min-w-0">
+              <span className="text-base shrink-0">{flag(match.away_team)}</span>
+              <span className="text-[#e2e8f0] font-bold text-sm truncate">{match.away_team}</span>
+            </div>
+          </div>
+        )}
+
+        {isLive && visibleGoals.length > 0 && (
+          <div
+            className="mt-3 pt-3 space-y-1.5"
+            style={{ borderTop: '1px solid rgba(30,58,110,0.35)' }}
+          >
+            {visibleGoals.map((g, i) => (
+              <div
+                key={`${g.minute}-${g.player}-${i}`}
+                className="flex items-center gap-2 text-[11px] text-[#94a3b8]"
+                dir="rtl"
+              >
+                <span className="shrink-0">⚽</span>
+                <span className="text-[#60a5fa] font-bold tabular-nums shrink-0">{g.minute}</span>
+                <span className="text-[#e2e8f0] font-medium truncate">
+                  {g.player}
+                  <span className="text-[#64748b] font-normal">
+                    {' '}({g.side === 'home' ? match.home_team : match.away_team})
+                  </span>
+                </span>
+              </div>
+            ))}
+            {hiddenGoals > 0 && (
+              <p className="text-[10px] text-[#64748b] pr-6">+{hiddenGoals} أهداف أخرى</p>
+            )}
           </div>
         )}
       </div>
@@ -247,7 +288,7 @@ export function LiveMatchCard() {
       .eq('status', 'live')
       .order('kickoff_time', { ascending: true })
 
-    if (liveRes.error?.message?.includes('match_minute')) {
+    if (liveRes.error?.message?.includes('match_minute') || liveRes.error?.message?.includes('match_events')) {
       selectCols = MATCH_SELECT_BASE
       liveRes = await supabase
         .from('matches')
@@ -308,16 +349,23 @@ export function LiveMatchCard() {
   useEffect(() => {
     fetchAllMatches()
 
-    const pollInterval = setInterval(async () => {
+    const scoreRefreshInterval = setInterval(async () => {
       if (!hasLiveRef.current) return
       try {
         await fetch('/api/public/score-refresh', { cache: 'no-store' })
-        // Safety net re-fetch in case realtime is slow
+      } catch {
+        // ignore
+      }
+    }, 45_000)
+
+    const dbRefetchInterval = setInterval(async () => {
+      if (!hasLiveRef.current) return
+      try {
         await fetchAllMatches()
       } catch {
         // ignore
       }
-    }, 3 * 60_000)
+    }, 30_000)
 
     const channel = supabase
       .channel('live-match-card-' + Math.random().toString(36).slice(2))
@@ -333,8 +381,10 @@ export function LiveMatchCard() {
             // live-first list is always rebuilt correctly. Never miss a live match.
             await fetchAllMatches()
           } else {
-            // Score-only change on a known match → patch in-place (smooth, no flicker)
-            setMatches(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m))
+            // Score / minute / goals change on a known match → patch in-place (smooth, no flicker)
+            setMatches(prev => prev.map(m =>
+              m.id === updated.id ? normalizeMatchRow({ ...m, ...updated }) : m,
+            ))
           }
         } else if (updated.status === 'live') {
           // A match we weren't tracking just went live → re-fetch full list
@@ -349,7 +399,8 @@ export function LiveMatchCard() {
       .subscribe()
 
     return () => {
-      clearInterval(pollInterval)
+      clearInterval(scoreRefreshInterval)
+      clearInterval(dbRefetchInterval)
       supabase.removeChannel(channel)
     }
   }, [])

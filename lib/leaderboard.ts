@@ -64,13 +64,15 @@ export async function fetchCombinedLeaderboard(): Promise<LeaderboardEntry[]> {
     const fromPredictions = byUserId[u.id] ?? 0
     const partId = nameToPartId.get((u.username as string).trim())
     const fromParticipantPreds = partId ? (byParticipantId[partId] ?? 0) : 0
-    // Prefer whichever source has the prediction; don't double-count.
     const live_points = fromPredictions || fromParticipantPreds
+    // Count from both tables — admin-entered predictions are in participant_predictions
+    const userCount = userPredCount.get(u.id) ?? 0
+    const partCount = partId ? (partPredCount.get(partId) ?? 0) : 0
     return {
       name: u.username as string,
       total_points: (u.total_points as number) ?? 0,
       exact_scores: (u.exact_scores as number) ?? 0,
-      prediction_count: userPredCount.get(u.id) ?? 0,
+      prediction_count: userCount || partCount,
       live_points,
       type: 'user' as const,
     }
