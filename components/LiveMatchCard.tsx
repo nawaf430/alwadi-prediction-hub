@@ -359,7 +359,6 @@ export function LiveMatchCard() {
     }, 45_000)
 
     const dbRefetchInterval = setInterval(async () => {
-      if (!hasLiveRef.current) return
       try {
         await fetchAllMatches()
       } catch {
