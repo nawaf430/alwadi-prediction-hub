@@ -1,6 +1,31 @@
 import { supabase } from '@/lib/supabase'
 import type { LivePointsResponse } from '@/app/api/public/live-points/route'
 
+/**
+ * Supabase/PostgREST caps unpaginated selects at 1000 rows. Tables like
+ * participant_predictions can exceed that, silently undercounting anything
+ * built from a single unpaginated fetch. This loops in pages until exhausted.
+ */
+async function fetchAllRows<T>(
+  table: string,
+  column: string,
+): Promise<T[]> {
+  const pageSize = 1000
+  let from = 0
+  const all: T[] = []
+  while (true) {
+    const { data, error } = await supabase
+      .from(table)
+      .select(column)
+      .range(from, from + pageSize - 1)
+    if (error || !data) break
+    all.push(...(data as unknown as T[]))
+    if (data.length < pageSize) break
+    from += pageSize
+  }
+  return all
+}
+
 export type LeaderboardEntry = {
   name: string
   total_points: number
@@ -21,7 +46,7 @@ export type LeaderboardEntry = {
  * permanently applied.
  */
 export async function fetchCombinedLeaderboard(): Promise<LeaderboardEntry[]> {
-  const [usersRes, participantsRes, userPredRes, partPredRes, liveRes] = await Promise.all([
+  const [usersRes, participantsRes, userPredRows, partPredRows, liveRes] = await Promise.all([
     supabase
       .from('profiles')
       .select('id, username, total_points, exact_scores, is_banned')
@@ -29,12 +54,8 @@ export async function fetchCombinedLeaderboard(): Promise<LeaderboardEntry[]> {
     supabase
       .from('participants')
       .select('id, name, total_points, exact_scores'),
-    supabase
-      .from('predictions')
-      .select('user_id'),
-    supabase
-      .from('participant_predictions')
-      .select('participant_id'),
+    fetchAllRows<{ user_id: string }>('predictions', 'user_id'),
+    fetchAllRows<{ participant_id: string }>('participant_predictions', 'participant_id'),
     fetch('/api/public/live-points', { cache: 'no-store' })
       .then(r => r.json() as Promise<LivePointsResponse>)
       .catch(() => ({ byUserId: {}, byParticipantId: {} } as LivePointsResponse)),
@@ -42,11 +63,11 @@ export async function fetchCombinedLeaderboard(): Promise<LeaderboardEntry[]> {
 
   // Prediction counts
   const userPredCount = new Map<string, number>()
-  for (const row of (userPredRes.data ?? [])) {
+  for (const row of userPredRows) {
     userPredCount.set(row.user_id, (userPredCount.get(row.user_id) ?? 0) + 1)
   }
   const partPredCount = new Map<string, number>()
-  for (const row of (partPredRes.data ?? [])) {
+  for (const row of partPredRows) {
     partPredCount.set(row.participant_id, (partPredCount.get(row.participant_id) ?? 0) + 1)
   }
 
