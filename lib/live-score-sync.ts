@@ -39,7 +39,10 @@ type FootballDataMatch = {
   status: string
   minute?: number | null
   score: {
+    duration?: string
     fullTime: { home: number | null; away: number | null }
+    regularTime?: { home: number | null; away: number | null }
+    extraTime?: { home: number | null; away: number | null }
   }
   goals?: Array<{
     minute: number
@@ -111,13 +114,26 @@ function mapFootballDataStatus(apiStatus: string): 'not_started' | 'live' | 'fin
 
 function normalizeFootballDataMatch(m: FootballDataMatch): NormalizedExternalMatch {
   const status = mapFootballDataStatus(m.status)
+
+  // football-data.org puts the *penalty shootout* score in fullTime when a knockout
+  // match goes to penalties — the actual played result (a draw) is in regularTime/
+  // extraTime. Per the prediction rules, a penalty-decided match counts as a draw,
+  // so we must store the real played score, not the shootout tally.
+  const wentToPenalties = m.score?.duration === 'PENALTY_SHOOTOUT'
+  const playedScore = wentToPenalties
+    ? {
+        home: (m.score?.regularTime?.home ?? 0) + (m.score?.extraTime?.home ?? 0),
+        away: (m.score?.regularTime?.away ?? 0) + (m.score?.extraTime?.away ?? 0),
+      }
+    : m.score?.fullTime
+
   return {
     source: 'football-data',
     externalId: String(m.id),
     apiRawStatus: m.status,
     status,
-    home: m.score?.fullTime?.home ?? null,
-    away: m.score?.fullTime?.away ?? null,
+    home: playedScore?.home ?? null,
+    away: playedScore?.away ?? null,
     matchMinute: status === 'live' && m.minute != null ? `${m.minute}'` : null,
   }
 }
