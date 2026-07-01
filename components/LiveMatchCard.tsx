@@ -71,6 +71,13 @@ function next12hRange(): [string, string] {
   return [now.toISOString(), end.toISOString()]
 }
 
+/** Returns [now-4h, now] — recently-finished matches (by kickoff time) stay visible this long */
+function past4hRange(): [string, string] {
+  const now = new Date()
+  const start = new Date(now.getTime() - 4 * 60 * 60 * 1000)
+  return [start.toISOString(), now.toISOString()]
+}
+
 const MATCH_SELECT_WITH_MINUTE =
   'id, home_team, away_team, kickoff_time, home_score, away_score, status, match_minute, match_events'
 const MATCH_SELECT_BASE =
@@ -107,8 +114,10 @@ const CHIP_ICON: Record<ChipStatus, string> = { exact: '⭐', correct: '✓', am
 
 function MatchCardUI({ match, preds }: { match: MatchCard; preds: LivePred[] }) {
   const isLive = match.status === 'live'
+  const isFinished = match.status === 'finished'
+  const hasResult = isLive || isFinished
   const liveOutcome =
-    isLive && match.home_score !== null && match.away_score !== null
+    hasResult && match.home_score !== null && match.away_score !== null
       ? outcome(match.home_score, match.away_score)
       : null
   const goals = match.match_events ?? []
@@ -138,6 +147,13 @@ function MatchCardUI({ match, preds }: { match: MatchCard; preds: LivePred[] }) 
               />
               مباشر{match.match_minute ? ` · ${match.match_minute}` : ''}
             </span>
+          ) : isFinished ? (
+            <span
+              className="text-xs font-bold text-[#94a3b8] px-2.5 py-1 rounded-full"
+              style={{ background: 'rgba(148,163,184,0.10)', border: '1px solid rgba(148,163,184,0.25)' }}
+            >
+              انتهت المباراة
+            </span>
           ) : (
             <span
               className="text-xs font-bold text-[#94a3b8] px-2.5 py-1 rounded-full"
@@ -151,13 +167,13 @@ function MatchCardUI({ match, preds }: { match: MatchCard; preds: LivePred[] }) 
           </span>
         </div>
 
-        {isLive ? (
+        {hasResult ? (
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 flex-1 justify-end min-w-0">
               <span className="text-[#e2e8f0] font-bold text-sm truncate">{match.home_team}</span>
               <span className="text-base shrink-0">{flag(match.home_team)}</span>
             </div>
-            <span className="text-[#60a5fa] font-black text-2xl tabular-nums px-3 shrink-0 tracking-tight">
+            <span className={cn('font-black text-2xl tabular-nums px-3 shrink-0 tracking-tight', isFinished ? 'text-[#94a3b8]' : 'text-[#60a5fa]')}>
               {match.home_score ?? 0} - {match.away_score ?? 0}
             </span>
             <div className="flex items-center gap-1.5 flex-1 justify-start min-w-0">
@@ -179,7 +195,7 @@ function MatchCardUI({ match, preds }: { match: MatchCard; preds: LivePred[] }) 
           </div>
         )}
 
-        {isLive && visibleGoals.length > 0 && (
+        {hasResult && visibleGoals.length > 0 && (
           <div
             className="mt-3 pt-3 space-y-1.5"
             style={{ borderTop: '1px solid rgba(30,58,110,0.35)' }}
@@ -207,7 +223,7 @@ function MatchCardUI({ match, preds }: { match: MatchCard; preds: LivePred[] }) 
         )}
       </div>
 
-      {isLive && preds.length > 0 && (
+      {hasResult && preds.length > 0 && (
         <div
           className="px-4 pt-2.5 pb-3"
           style={{ borderTop: '1px solid rgba(30,58,110,0.5)' }}
@@ -284,6 +300,7 @@ export function LiveMatchCard() {
 
   async function fetchAllMatches() {
     const [windowStart, windowEnd] = next12hRange()
+    const [finishedStart, finishedEnd] = past4hRange()
 
     let selectCols = MATCH_SELECT_WITH_MINUTE
     let liveRes = await supabase
@@ -301,6 +318,14 @@ export function LiveMatchCard() {
         .order('kickoff_time', { ascending: true })
     }
 
+    const finishedRes = await supabase
+      .from('matches')
+      .select(selectCols)
+      .eq('status', 'finished')
+      .gte('kickoff_time', finishedStart)
+      .lt('kickoff_time', finishedEnd)
+      .order('kickoff_time', { ascending: false })
+
     const upcomingRes = await supabase
       .from('matches')
       .select(selectCols)
@@ -313,6 +338,7 @@ export function LiveMatchCard() {
 
     let allMatches: MatchCard[] = [
       ...liveMatchesData,
+      ...(finishedRes.data ?? []).map(normalizeMatchRow),
       ...(upcomingRes.data ?? []).map(normalizeMatchRow),
     ]
 
@@ -333,10 +359,10 @@ export function LiveMatchCard() {
 
     setMatches(allMatches)
 
-    // Fetch predictions for every live match in parallel
-    const liveMatches = allMatches.filter(m => m.status === 'live')
+    // Fetch predictions for every live or recently-finished match in parallel
+    const matchesNeedingPreds = allMatches.filter(m => m.status === 'live' || m.status === 'finished')
     const predResults = await Promise.all(
-      liveMatches.map(m => fetchPredsForMatch(m.id).then(p => [m.id, p] as const))
+      matchesNeedingPreds.map(m => fetchPredsForMatch(m.id).then(p => [m.id, p] as const))
     )
     const newMap: PredsMap = new Map(predResults)
     setPredsMap(newMap)

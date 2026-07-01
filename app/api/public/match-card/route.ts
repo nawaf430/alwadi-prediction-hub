@@ -8,6 +8,13 @@ function next12hRange(): [string, string] {
   return [now.toISOString(), end.toISOString()]
 }
 
+/** Returns [now-4h, now] — recently-finished matches (by kickoff time) stay visible this long */
+function past4hRange(): [string, string] {
+  const now = new Date()
+  const start = new Date(now.getTime() - 4 * 60 * 60 * 1000)
+  return [start.toISOString(), now.toISOString()]
+}
+
 export async function GET() {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -15,6 +22,7 @@ export async function GET() {
   )
 
   const [windowStart, windowEnd] = next12hRange()
+  const [finishedStart, finishedEnd] = past4hRange()
 
   let selectCols =
     'id, home_team, away_team, kickoff_time, home_score, away_score, status, match_minute, match_events'
@@ -32,6 +40,14 @@ export async function GET() {
       .eq('status', 'live')
       .order('kickoff_time', { ascending: true })
   }
+
+  const finishedRes = await supabase
+    .from('matches')
+    .select(selectCols)
+    .eq('status', 'finished')
+    .gte('kickoff_time', finishedStart)
+    .lt('kickoff_time', finishedEnd)
+    .order('kickoff_time', { ascending: false })
 
   const upcomingRes = await supabase
     .from('matches')
@@ -61,6 +77,7 @@ export async function GET() {
 
   const matches = [
     ...((liveRes.data ?? []) as unknown as MatchRow[]).map(normalize),
+    ...((finishedRes.data ?? []) as unknown as MatchRow[]).map(normalize),
     ...((upcomingRes.data ?? []) as unknown as MatchRow[]).map(normalize),
   ]
 
