@@ -41,7 +41,7 @@ function outcome(h: number, a: number): 'home' | 'draw' | 'away' {
   return h > a ? 'home' : h < a ? 'away' : 'draw'
 }
 
-type ChipStatus = 'correct' | 'amber' | 'wrong' | 'pending'
+type ChipStatus = 'exact' | 'correct' | 'amber' | 'wrong' | 'pending'
 
 function chipStatus(
   pred: LivePred,
@@ -49,6 +49,9 @@ function chipStatus(
   match: { home_score: number | null; away_score: number | null } | null,
 ): ChipStatus {
   if (liveOutcome === null) return 'pending'
+  if (pred.predicted_home === match?.home_score && pred.predicted_away === match?.away_score) {
+    return 'exact'
+  }
   const predOut = outcome(pred.predicted_home, pred.predicted_away)
   if (predOut === liveOutcome) return 'correct'
   if (predOut === 'draw' && liveOutcome === 'draw') return 'amber'
@@ -94,12 +97,13 @@ const MAX_GOALS_DISPLAY = 6
 // ── Single card (pure render) ────────────────────────────────────────────────
 
 const CHIP_STYLES: Record<ChipStatus, string> = {
+  exact:   'bg-gradient-to-r from-[#fde68a] via-[#fbbf24] to-[#f59e0b] border border-[#fde68a] text-[#3a2a00] font-bold shadow-[0_0_10px_rgba(251,191,36,0.65)]',
   correct: 'bg-[rgba(34,197,94,0.12)] border border-[rgba(34,197,94,0.25)] text-[#4ade80]',
   amber:   'bg-[rgba(245,158,11,0.12)] border border-[rgba(245,158,11,0.25)] text-[#fbbf24]',
   wrong:   'bg-[rgba(239,68,68,0.10)] border border-[rgba(239,68,68,0.20)] text-[#f87171]',
   pending: 'bg-[rgba(148,163,184,0.08)] border border-[rgba(148,163,184,0.15)] text-[#94a3b8]',
 }
-const CHIP_ICON: Record<ChipStatus, string> = { correct: '✓', amber: '~', wrong: '✗', pending: '·' }
+const CHIP_ICON: Record<ChipStatus, string> = { exact: '⭐', correct: '✓', amber: '~', wrong: '✗', pending: '·' }
 
 function MatchCardUI({ match, preds }: { match: MatchCard; preds: LivePred[] }) {
   const isLive = match.status === 'live'
